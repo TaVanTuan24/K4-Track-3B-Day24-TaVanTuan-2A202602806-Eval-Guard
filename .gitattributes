@@ -1,0 +1,41 @@
+# Reproducible file bytes across Windows, Linux and CI.
+#
+# ROOT CAUSE of the previous Windows/Linux hash divergence
+# -------------------------------------------------------
+# There was no .gitattributes and `core.autocrlf=true`, so git stored LF in the index
+# but checked CRLF into the working tree. `metadata.source_sha256` is computed from the
+# WORKING-TREE bytes (Path.read_bytes() in src/experiment_support.py), so the artifacts
+# recorded hashes of CRLF content. On a Linux clone (autocrlf=false/input) the working
+# tree is LF, the recomputed hash differs, and `validate_metadata` fails — meaning
+# check_lab.py passed only on the machine that produced the artifacts.
+#
+# FIX
+# ---
+# Force LF in the working tree on every platform, so the working tree always equals the
+# blob and Path.read_bytes() is deterministic. `.gitattributes` is committed BEFORE the
+# renormalization commit, so a fresh clone of any commit from here on gets LF.
+#
+# Verified after the change with: git ls-files --eol   (every tracked text file w/lf)
+* text=auto eol=lf
+
+# Explicit rules: a change to `* text=auto` detection can then never silently flip the
+# line endings of the file types this project hashes, diffs or validates.
+*.json          text eol=lf
+*.md            text eol=lf
+*.py            text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.txt           text eol=lf
+*.ini           text eol=lf
+*.co            text eol=lf
+*.example       text eol=lf
+*.cfg           text eol=lf
+.gitignore      text eol=lf
+.gitattributes  text eol=lf
+
+# Binary payloads must never be converted: the corpus PDFs and any model/weight blob.
+*.pdf   binary
+*.bin   binary
+*.onnx  binary
+*.gguf  binary
+*.zip   binary
