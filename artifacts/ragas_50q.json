@@ -868,8 +868,8 @@
       "question": "Muốn mua thiết bị trị giá 55 triệu cần ai phê duyệt?",
       "avg_score": 0.0,
       "worst_metric": "faithfulness",
-      "diagnosis": "Retrieval failure + abstention — model từ chối và context thiếu 1 dữ kiện của reference (ví dụ ['50000000'])",
-      "suggested_fix": "Tăng recall: cải thiện chunking/top-k, thêm BM25 cho số và mã, và chỉ cho phép trả lời 'Không tìm thấy.' khi mọi context đều không liên quan."
+      "diagnosis": "Missing specific evidence — tài liệu liên quan đã được truy xuất (coverage 0.60) nhưng thiếu 1 giá trị của reference (ví dụ ['50000000'])",
+      "suggested_fix": "Tăng recall trong nội bộ tài liệu đúng: chunk nhỏ hơn/overlap lớn hơn cho bảng và ngưỡng, thêm BM25 cho số, và kiểm tra chunk chứa ngưỡng có được index."
     },
     {
       "rank": 2,
@@ -878,8 +878,8 @@
       "question": "Nhân viên cấp Manager có thời hạn thử việc 90 ngày, đang trong tháng thứ 3, phát hiện vi phạm bảo mật. Họ nên và không nên làm gì theo chính sách?",
       "avg_score": 0.0,
       "worst_metric": "faithfulness",
-      "diagnosis": "Retrieval failure + abstention — model từ chối và context thiếu 1 dữ kiện của reference (ví dụ ['9999'])",
-      "suggested_fix": "Tăng recall: cải thiện chunking/top-k, thêm BM25 cho số và mã, và chỉ cho phép trả lời 'Không tìm thấy.' khi mọi context đều không liên quan."
+      "diagnosis": "Missing context evidence — model từ chối và context gần như lệch chủ đề (coverage 0.12 < 0.3); thiếu 1 dữ kiện của reference (ví dụ ['9999'])",
+      "suggested_fix": "Retrieval là nút cổ chai: cải thiện query/chunking/top-k để lấy đúng tài liệu chủ đề, thêm BM25 cho số và mã, và chỉ cho phép 'Không tìm thấy.' khi mọi context đều không liên quan."
     },
     {
       "rank": 3,
@@ -888,8 +888,8 @@
       "question": "Bao lâu phải đổi mật khẩu một lần?",
       "avg_score": 0.0,
       "worst_metric": "faithfulness",
-      "diagnosis": "Retrieval failure + abstention — model từ chối và context thiếu 2 dữ kiện của reference (ví dụ ['120', '90'])",
-      "suggested_fix": "Tăng recall: cải thiện chunking/top-k, thêm BM25 cho số và mã, và chỉ cho phép trả lời 'Không tìm thấy.' khi mọi context đều không liên quan."
+      "diagnosis": "Version conflict — chỉ truy xuất được tài liệu bản ['1.0'] (đã hết hiệu lực), thiếu tài liệu bản ['2.0'] hiện hành; phiên bản ['2.0'] chỉ được NHẮC ĐẾN trong thân tài liệu cũ, không phải tài liệu đã được truy xuất",
+      "suggested_fix": "Lọc theo phiên bản khi truy vấn nhắc tới phiên bản (metadata filter trên auto_metadata.version), ưu tiên bản hiện hành, và nêu rõ hiện hành so với đã bị thay thế trong prompt generation."
     },
     {
       "rank": 4,
@@ -898,8 +898,8 @@
       "question": "Nhân viên Manager có thể dùng VPN cá nhân (như NordVPN) khi WFH để tăng bảo mật thêm không?",
       "avg_score": 0.2708,
       "worst_metric": "faithfulness",
-      "diagnosis": "Abstention — context có bằng chứng nhưng model vẫn từ chối trả lời",
-      "suggested_fix": "Nới điều kiện trả lời 'Không tìm thấy.' trong system prompt, yêu cầu dùng mọi context liên quan và hạ temperature; đây là lỗi generation, không phải hallucination."
+      "diagnosis": "Abstention despite available evidence — coverage 0.39, mọi giá trị đặc trưng của reference đều có trong context nhưng model vẫn từ chối",
+      "suggested_fix": "Đây là lỗi generation: nới điều kiện trả lời 'Không tìm thấy.' trong system prompt, yêu cầu dùng mọi context liên quan (không phải hallucination)."
     },
     {
       "rank": 5,
@@ -908,8 +908,8 @@
       "question": "So sánh quyền lợi bảo hiểm giữa nhân viên thử việc và nhân viên chính thức.",
       "avg_score": 0.375,
       "worst_metric": "faithfulness",
-      "diagnosis": "Retrieval failure + abstention — model từ chối và context thiếu 1 dữ kiện của reference (ví dụ ['200'])",
-      "suggested_fix": "Tăng recall: cải thiện chunking/top-k, thêm BM25 cho số và mã, và chỉ cho phép trả lời 'Không tìm thấy.' khi mọi context đều không liên quan."
+      "diagnosis": "Missing specific evidence — tài liệu liên quan đã được truy xuất (coverage 0.54) nhưng thiếu 1 giá trị của reference (ví dụ ['200'])",
+      "suggested_fix": "Tăng recall trong nội bộ tài liệu đúng: chunk nhỏ hơn/overlap lớn hơn cho bảng và ngưỡng, thêm BM25 cho số, và kiểm tra chunk chứa ngưỡng có được index."
     },
     {
       "rank": 6,
@@ -918,8 +918,8 @@
       "question": "Nhân viên Manager có thâm niên 12 năm: tổng phụ cấp hàng tháng và số ngày phép năm theo v2024 là bao nhiêu?",
       "avg_score": 0.4286,
       "worst_metric": "answer_relevancy",
-      "diagnosis": "Retrieval failure + abstention — model từ chối và context thiếu 4 dữ kiện của reference (ví dụ ['1000000', '1500000', '19'])",
-      "suggested_fix": "Tăng recall: cải thiện chunking/top-k, thêm BM25 cho số và mã, và chỉ cho phép trả lời 'Không tìm thấy.' khi mọi context đều không liên quan."
+      "diagnosis": "Partial answer — đã trả lời một phần câu hỏi; các giá trị reference không xuất hiện nguyên văn trong context: ['1000000', '1500000', '19', '500000'] (giá trị suy ra được thì không phải thiếu bằng chứng)",
+      "suggested_fix": "Đọc answer/contexts để xác định phần chưa trả lời, rồi bổ sung bằng chứng cho đúng phần đó (chunking/top-k cho bảng và phụ cấp); không hạ temperature vì phần đã trả lời là đúng."
     },
     {
       "rank": 7,

@@ -48,7 +48,34 @@ OBSOLETE_MARKERS = ("hết hiệu lực", "đã bị thay thế", "thay thế ho
 # therefore verified by reading the row in the report instead of by a keyword test.
 _VERSION_RE = re.compile(r"\bv(\d+(?:\.\d+)*)\b", re.IGNORECASE)
 _NUMBER_RE = re.compile(r"\d[\d.,]*\d|\d")
-_SENTENCE_SPLIT = re.compile(r"[.;:\n]+")
+# Split on ';', newlines, and a period FOLLOWED BY SPACE — never on a bare '.', because
+# that would cut version labels in half ("v2.0 HIỆN HÀNH" became "v2" + "0 ..."), which
+# silently emptied `obsolete_versions` and hid the version trap on row 44.
+_SENTENCE_SPLIT = re.compile(r"(?:[;\n]+|\.\s+)")
+# m5 enrichment prefixes each context with "[topic | doc_type | version]". That header is
+# the RETRIEVED DOCUMENT's own version (structured metadata), which is much stronger
+# evidence than a version-looking string anywhere in the body: an old document can mention
+# a newer version (measured on row 44, whose v1.0 context says "ĐÃ THAY THẾ bởi v2.0").
+_CONTEXT_HEADER_RE = re.compile(r"^\s*\[(?P<tag>[^\]]*)\]")
+_TOKEN_RE = re.compile(r"[0-9A-Za-zÀ-ỹ]+", re.UNICODE)
+
+# Coverage floor for "the retrieved set barely overlaps the reference topic". Measured on
+# this run's abstention rows: the off-topic retrieval (row 40, contexts about probation
+# and data classification while the reference is about incident reporting) scores 0.15,
+# while rows whose contexts do contain the needed policy score 0.39-0.85. 0.30 sits in
+# that gap; the value is a documented heuristic, not a threshold tuned to pass a test.
+COVERAGE_FLOOR = 0.30
+# An answer counts as a PARTIAL answer when substantial content follows the abstention
+# phrase (row 33 answers the leave-days half and abstains only on the allowance).
+PARTIAL_ANSWER_MIN_CHARS = 120
+
+# Very common Vietnamese words carry no topical signal, so they are excluded from the
+# coverage measure: including them would inflate coverage for every row equally.
+COVERAGE_STOPWORDS = frozenset("""
+và của cho các có theo khi là trong một với được hoặc từ này những nhân viên không phải
+nên gồm về đến trên dưới sau trước mỗi tất cả như để nếu thì bị do tại bao nhiêu ngày
+tháng năm nào gì sao ai đâu cần có thể sẽ đã đang rồi mà hay vài một số
+""".split())
 
 
 @dataclass
@@ -207,12 +234,6 @@ def run_ragas_50q(answers: list[dict]) -> RagasEvaluation:
     return RagasEvaluation(results, evaluator_models)
 
 
-def is_abstention(answer: str) -> bool:
-    """The model declined instead of answering — the opposite of hallucinating."""
-    text = (answer or "").strip().lower().rstrip(".")
-    return any(text.startswith(marker) or text == marker for marker in ABSTENTION_MARKERS)
-
-
 def reference_numbers(text: str) -> set[str]:
     """Digit strings with separators removed, keeping only distinctive values (2+ digits).
 
@@ -249,21 +270,64 @@ def current_versions(reference: str) -> set[str]:
 
 
 def is_version_conflict(result: RagasResult) -> bool:
-    """True only when the evidence proves an obsolete-only retrieval.
+    """True only when the RETRIEVED DOCUMENT versions prove an obsolete-only retrieval.
 
-    Requires: the reference distinguishes superseded from in-force versions, the
-    contexts surface an obsolete version, and no in-force version is present at all.
-    A row whose contexts do contain the in-force version is NOT called a conflict —
-    that keeps the label tied to bytes instead of to a guess.
+    Version identity comes from each context's m5 header (`[topic | doc_type | version]`),
+    not from scanning the body: a superseded document can name its replacement inside its
+    own text ("ĐÃ THAY THẾ bởi v2.0"), and treating such a mention as "the current version
+    was retrieved" would hide a real version trap. Measured on row 44, whose only versioned
+    context is the v1.0 document and whose `v2.0` occurrence is exactly such a mention.
+
+    Requires: the reference distinguishes superseded from in-force versions, an obsolete
+    document version was retrieved, and no in-force document version was retrieved.
     """
     obsolete = obsolete_versions(result.ground_truth)
     current = current_versions(result.ground_truth)
     if not obsolete or not current:
         return False
-    context_versions: set[str] = set()
+    retrieved = retrieved_document_versions(result)
+    return bool(retrieved & obsolete) and not (retrieved & current)
+
+
+def context_header_tag(context: str) -> str | None:
+    """The `[topic | doc_type | version]` tag m5 prefixed to a context, if present."""
+    match = _CONTEXT_HEADER_RE.match(context or "")
+    return match.group("tag").strip() if match else None
+
+
+def context_document_version(context: str) -> str | None:
+    """The version of the document a context came from, read from its own header tag."""
+    tag = context_header_tag(context)
+    if not tag:
+        return None
+    parts = [part.strip() for part in tag.split("|")]
+    if len(parts) < 3 or not parts[2]:
+        return None
+    versions = version_markers(parts[2]) or {part.removeprefix("v") for part in (parts[2],)}
+    return sorted(versions)[0] if versions else None
+
+
+def retrieved_document_versions(result: RagasResult) -> set[str]:
+    """Versions of the documents actually retrieved (header-based; may be empty)."""
+    found = set()
     for context in result.contexts:
-        context_versions |= version_markers(context)
-    return bool(context_versions & obsolete) and not (context_versions & current)
+        version = context_document_version(context)
+        if version:
+            found.add(version)
+    return found
+
+
+def version_mentions_beyond_headers(result: RagasResult) -> set[str]:
+    """Versions that appear in the bodies but not in any retrieved document's header.
+
+    These are the misleading ones: named by an older document rather than retrieved.
+    Reported so a version-conflict diagnosis can say WHY the body text is not evidence.
+    """
+    in_bodies: set[str] = set()
+    for context in result.contexts:
+        body = _CONTEXT_HEADER_RE.sub("", context or "")
+        in_bodies |= version_markers(body)
+    return in_bodies - retrieved_document_versions(result)
 
 
 def missing_reference_numbers(result: RagasResult) -> set[str]:
@@ -273,30 +337,123 @@ def missing_reference_numbers(result: RagasResult) -> set[str]:
     return wanted - present
 
 
+def content_tokens(text: str) -> set[str]:
+    """Topical tokens: length >= 3 and not in the common-word list."""
+    return {token for token in (match.group(0).lower() for match in _TOKEN_RE.finditer(text or ""))
+            if len(token) >= 3 and token not in COVERAGE_STOPWORDS}
+
+
+def reference_coverage(result: RagasResult) -> float:
+    """Fraction of the reference's topical vocabulary that appears in the contexts.
+
+    A cheap, transparent proxy for "did retrieval bring evidence on this topic at all".
+    It is only one signal: the diagnosis also checks distinctive numbers and document
+    versions, and the Markdown analysis reads the rows.
+    """
+    wanted = content_tokens(result.ground_truth)
+    if not wanted:
+        return 1.0
+    present = content_tokens(" ".join(result.contexts))
+    return len(wanted & present) / len(wanted)
+
+
+def abstention_kind(answer: str) -> str:
+    """`none` | `partial` | `complete`.
+
+    Only an answer that *opens* with an abstention statement counts. A marker buried
+    inside a substantive answer is not an abstention — measured on row 39, whose
+    comparison table legitimately contains a cell like "không đề cập" for a criterion the
+    v1.0 policy never covered; treating that as a partial abstention would have replaced a
+    correct diagnosis ("Too many irrelevant chunks") with a wrong one.
+
+    A PARTIAL answer keeps substantive content after the opening phrase. Row 33 is the
+    measured example: it correctly answers the leave-days half ("15 + 4 = 19 ngày phép")
+    and abstains only on the allowance, so calling it a total abstention would hide that
+    half the question was answered and would misdirect the fix.
+    """
+    text = (answer or "").strip().lstrip("*#-> \t")
+    lowered = text.lower()
+    marker = next((m for m in ABSTENTION_MARKERS if lowered.startswith(m)), None)
+    if marker is None:
+        return "none"
+    remainder = text
+    for candidate in ABSTENTION_MARKERS:
+        remainder = re.sub(re.escape(candidate), " ", remainder, flags=re.IGNORECASE)
+    remainder = remainder.strip(" \t\n\r.,;:*_-")
+    return "partial" if len(remainder) >= PARTIAL_ANSWER_MIN_CHARS else "complete"
+
+
 def diagnose(result: RagasResult) -> tuple[str, str]:
     """Evidence-based root cause for one row, with `DIAGNOSTIC_TREE` as the fallback.
 
-    Order matters: an obsolete-only retrieval is specific and checkable, so it is tested
-    before the generic abstention split; the metric-based default only runs when nothing
-    more precise applies. Polarity (negation) errors are deliberately NOT auto-classified
-    — see the note next to the vocabulary constants above.
+    Decision order, most specific and verifiable first:
+      1. version conflict — an obsolete document was retrieved and no in-force one was;
+      2. partial answer — substantive content plus an abstention, so the fix is narrower;
+      3. complete abstention — split by whether the retrieved set covers the reference
+         topic at all (missing context evidence) or merely lacks specific values
+         (missing specific evidence), else abstention despite available evidence;
+      4. `DIAGNOSTIC_TREE[worst_metric]` for rows that neither abstained nor hit a
+         version trap.
+
+    Labels are hedged where the signal is weak ("possible"), because a lexical proxy
+    cannot prove a semantic cause. Polarity errors are not auto-classified — see the note
+    by the vocabulary constants.
     """
     missing = missing_reference_numbers(result)
+    coverage = reference_coverage(result)
+    kind = abstention_kind(result.answer)
 
     if is_version_conflict(result):
-        return ("Version conflict — context chỉ chứa bản đã hết hiệu lực, thiếu bản hiện hành",
-                "Lọc theo phiên bản (metadata filter trên auto_metadata.version) và nêu rõ "
-                "bản hiện hành so với bản đã bị thay thế trong prompt generation.")
+        retrieved = sorted(retrieved_document_versions(result))
+        wanted = sorted(current_versions(result.ground_truth))
+        mention_note = ""
+        mentions = version_mentions_beyond_headers(result)
+        if mentions:
+            mention_note = (f"; phiên bản {sorted(mentions)} chỉ được NHẮC ĐẾN trong thân tài liệu cũ, "
+                            "không phải tài liệu đã được truy xuất")
+        return (f"Version conflict — chỉ truy xuất được tài liệu bản {retrieved} (đã hết hiệu lực), "
+                f"thiếu tài liệu bản {wanted} hiện hành{mention_note}",
+                "Lọc theo phiên bản khi truy vấn nhắc tới phiên bản (metadata filter trên "
+                "auto_metadata.version), ưu tiên bản hiện hành, và nêu rõ hiện hành so với "
+                "đã bị thay thế trong prompt generation.")
 
-    if is_abstention(result.answer):
+    if kind == "partial":
+        # Absent-verbatim is not the same as missing evidence: a value can be derivable
+        # from the context (row 33's "19 ngày" is 15 + 4 and is absent verbatim), so the
+        # label reports what is absent and defers the "which half lacks evidence" call to
+        # the reader instead of asserting it.
+        detail = (f"các giá trị reference không xuất hiện nguyên văn trong context: "
+                  f"{sorted(missing)[:4]}" if missing
+                  else "chưa xác định được giá trị nào thiếu bằng chứng")
+        return (f"Partial answer — đã trả lời một phần câu hỏi; {detail} "
+                f"(giá trị suy ra được thì không phải thiếu bằng chứng)",
+                "Đọc answer/contexts để xác định phần chưa trả lời, rồi bổ sung bằng chứng cho "
+                "đúng phần đó (chunking/top-k cho bảng và phụ cấp); không hạ temperature vì "
+                "phần đã trả lời là đúng.")
+
+    if kind == "complete":
+        if missing and coverage < COVERAGE_FLOOR:
+            return (f"Missing context evidence — model từ chối và context gần như lệch chủ đề "
+                    f"(coverage {coverage:.2f} < {COVERAGE_FLOOR}); thiếu {len(missing)} dữ kiện "
+                    f"của reference (ví dụ {sorted(missing)[:3]})",
+                    "Retrieval là nút cổ chai: cải thiện query/chunking/top-k để lấy đúng tài liệu "
+                    "chủ đề, thêm BM25 cho số và mã, và chỉ cho phép 'Không tìm thấy.' khi mọi "
+                    "context đều không liên quan.")
         if missing:
-            return (f"Retrieval failure + abstention — model từ chối và context thiếu "
-                    f"{len(missing)} dữ kiện của reference (ví dụ {sorted(missing)[:3]})",
-                    "Tăng recall: cải thiện chunking/top-k, thêm BM25 cho số và mã, và chỉ "
-                    "cho phép trả lời 'Không tìm thấy.' khi mọi context đều không liên quan.")
-        return ("Abstention — context có bằng chứng nhưng model vẫn từ chối trả lời",
-                "Nới điều kiện trả lời 'Không tìm thấy.' trong system prompt, yêu cầu dùng "
-                "mọi context liên quan và hạ temperature; đây là lỗi generation, không phải hallucination.")
+            return (f"Missing specific evidence — tài liệu liên quan đã được truy xuất "
+                    f"(coverage {coverage:.2f}) nhưng thiếu {len(missing)} giá trị của reference "
+                    f"(ví dụ {sorted(missing)[:3]})",
+                    "Tăng recall trong nội bộ tài liệu đúng: chunk nhỏ hơn/overlap lớn hơn cho "
+                    "bảng và ngưỡng, thêm BM25 cho số, và kiểm tra chunk chứa ngưỡng có được index.")
+        if coverage >= COVERAGE_FLOOR:
+            return (f"Abstention despite available evidence — coverage {coverage:.2f}, mọi giá trị "
+                    f"đặc trưng của reference đều có trong context nhưng model vẫn từ chối",
+                    "Đây là lỗi generation: nới điều kiện trả lời 'Không tìm thấy.' trong system "
+                    "prompt, yêu cầu dùng mọi context liên quan (không phải hallucination).")
+        return ("Abstention — chưa đủ bằng chứng để kết luận nguyên nhân (possible generation "
+                "hoặc retrieval failure)",
+                "Đọc thủ công answer/contexts/reference của dòng này trước khi sửa; kiểm tra cả "
+                "prompt grounding và chất lượng retrieval.")
 
     return DIAGNOSTIC_TREE[result.worst_metric]
 
