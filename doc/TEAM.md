@@ -10,13 +10,25 @@ Trưởng nhóm/người nộp: Tạ Văn Tuấn — 2A202602806.
 
 Ngày lab/deadline áp dụng: theo thông báo của lớp — Asia/Ho_Chi_Minh (UTC+07:00).
 
-Commit dùng để chấm: `832bc818738a617fcadc6528f36cb36c6d228686` (commit 832bc81, nhánh
-`main`) — bản mới nhất, đã gồm toàn bộ source, artifact, báo cáo **và** các sửa đổi của
-lần audit cuối. Chuỗi commit liên quan: `cd8b86c` là bản hoàn thành bài (source +
-4 artifact + 3 báo cáo + TEAM), `fbf601a` thêm `.gitattributes`, `832bc81` là audit
-cuối (hash đa nền tảng, cache theo model/prompt, chẩn đoán lỗi theo bằng chứng, sửa
-báo cáo). Artifact thực nghiệm vẫn là kết quả của lần chạy thật ở `cd8b86c`: lần audit
-**không** chạy lại RAGAS/Judge/Guardrails và không phát sinh chi phí API.
+Nhánh nộp bài: `main`.
+
+Các mốc commit, đặt theo nhãn ổn định. Nhánh `main` vẫn có thể nhận commit mới sau thời
+điểm ghi tài liệu này, nên không nhãn nào được mô tả là commit cuối cùng:
+
+| Nhãn | Commit | Nội dung |
+|---|---|---|
+| **Original live experiment commit** | `cd8b86c` | Tạo kết quả thực nghiệm: 5 module RAG, ba phase, `answers_50q.json` và ba artifact, ba báo cáo, TEAM |
+| Line-ending / reproducibility | `fbf601a` | Thêm `.gitattributes` (ép LF) để hash không phụ thuộc nền tảng |
+| **Final audit commit** | `832bc81` | Sửa hash metadata, cache theo model/prompt, chẩn đoán lỗi theo bằng chứng, sửa báo cáo |
+| Ghi nhận commit | `1c6fa8e` | Chỉ sửa TEAM.md để ghi lại mốc `832bc81` |
+
+**Commit tạo kết quả thực nghiệm là `cd8b86c`.** Mọi commit sau đó chỉ sửa code, tài
+liệu, test và hash metadata; **không** commit nào chạy lại RAGAS/Judge/Guardrails hay
+tạo lại số đo, nên các giá trị trong artifact vẫn là kết quả của lần chạy thật đó.
+
+SHA để chấm: lấy trực tiếp tại thời điểm nộp bằng `git rev-parse HEAD` (và mở đúng
+commit đó trên GitHub) thay vì ghi cứng trong file này — repo không tự nhúng SHA của
+chính commit đang được tạo.
 
 Mỗi nhóm nộp một repo. Nhóm này chỉ có một thành viên nên bảng bên dưới có một dòng
 và mục INDIVIDUAL có một mục tương ứng.
@@ -94,20 +106,24 @@ một dependency không cài được, kèm bằng chứng rằng các rail mà 
   `.gitattributes` (LF đa nền tảng) và Tasks 1–12 trong `src/phase_a_ragas.py`,
   `src/phase_b_judge.py`, `src/phase_c_guard.py`.
   Audit cuối bổ sung `tests/test_hash_reproducibility.py`,
-  `tests/test_cache_keys.py` và `tests/test_report_numbers.py`.
+  `tests/test_cache_keys.py`, `tests/test_report_numbers.py` và
+  `tests/test_phase_a_diagnosis.py`.
 - Bằng chứng: ba artifact `ragas_50q.json` (140.0 KB), `judge_results.json` (13.5 KB),
   `guard_results.json` (14.6 KB) cùng `answers_50q.json` (127.8 KB), ba báo cáo trong
   `doc/reports/`, và commit của bài nộp ghi ở mục cuối. Kích thước đo sau khi đã
   chuẩn hoá LF và ghi lại hash.
-- Cách kiểm tra: offline `python -m pytest tests/ -q` cho **136 passed, 3 deselected**
-  (`-m support` 110 passed, `-m student` 26 passed); live `python scripts/check_api.py
+- Cách kiểm tra: offline `python -m pytest tests/ -q` cho **152 passed, 3 deselected**
+  (`-m support` 110 passed, `-m student` 42 passed); live `python scripts/check_api.py
   --live` cho 12 check PASS (1 lượt chat, structured JSON, NeMo input chặn jailbreak/
   cho qua câu sạch, NeMo output chặn output nhạy cảm/giữ output sạch);
   `python scripts/check_evaluator.py --live --rows 3` để kiểm tra evaluator trước khi
   chạy đủ 50; `python scripts/run_experiments.py --phase a/b/c --live`.
   Hậu kiểm offline, không gọi API: `python scripts/refresh_metadata_hashes.py --check`,
   `python scripts/refresh_phase_a_annotations.py --check`,
-  `python scripts/check_lab.py --with-tests` (0 failed checks).
+  `python scripts/check_lab.py --with-tests` (0 failed checks, 26 check).
+  CI offline: `.github/workflows/validate.yml` chạy đúng bốn bước trên (thêm
+  `compileall`) trên Ubuntu + Python 3.11 với chỉ 4 gói test, không secrets, không gọi
+  provider, không tải model và không sửa artifacts.
 - Điều đã học: (1) LLM provider trong NeMo 0.10.0 được chọn theo **tên model**, nên
   không thể dùng `engine: openai` với model Gemini mà phải đăng ký engine riêng;
   (2) `max_tokens=3` mặc định của self-check khiến model trả `None` và mọi input bị
@@ -134,23 +150,45 @@ một dependency không cài được, kèm bằng chứng rằng các rail mà 
 
 ## Cập nhật sau khi nộp
 
-Sau bản hoàn thành bài `cd8b86c`, repo được sửa thêm hai lần trong lần **audit cuối**:
-`fbf601a` (thêm `.gitattributes`, ép LF để hash ổn định đa nền tảng) và `832bc81`
-(audit: hash/tài liệu đa nền tảng, cache khoá theo model và prompt, chẩn đoán lỗi theo
-bằng chứng, sửa các kết luận sai trong báo cáo). Commit dùng để chấm là
-`832bc818738a617fcadc6528f36cb36c6d228686` (832bc81), chứa đủ source, ba artifact và
-ba báo cáo.
+Repo được sửa sau bản hoàn thành bài `cd8b86c` trong **hai vòng audit**, tất cả đều
+offline (không gọi API, không tạo lại số đo):
 
-Thay đổi so với bản nộp đầu, để đối chiếu minh bạch:
+**Vòng 1 — reproducibility + cache + chẩn đoán (commit `fbf601a`, `832bc81`):**
 
 - `metadata.source_sha256` trong ba artifact được ghi lại đúng **một lần** cho khớp
-  byte LF sau khi chuẩn hoá line endings; metric, thứ hạng bottom 10, `created_at`,
-  model roles và raw latency samples **không đổi** (đã kiểm chứng bằng so sánh JSON).
-- `bottom_10[].diagnosis`/`suggested_fix` được xuất lại theo phân loại dựa trên bằng
-  chứng (6/10 dòng đổi nhãn, ví dụ “LLM hallucinating” → “Retrieval failure +
-  abstention”); `rank`, `avg_score` và `worst_metric` của cả 10 dòng **không đổi**.
-- Ba báo cáo Markdown được sửa lại; cụ thể `blueprint.md` sửa kết luận sai về ngưỡng
-  RAGAS của nhóm multi_hop, và `failure_clusters.md` phân tích lại nguyên nhân của
-  id 5 và id 44.
-- Không có lượt gọi API nào được thực hiện trong lần audit, nên không có số đo nào
-  được tạo mới.
+  byte LF sau khi chuẩn hoá line endings, kèm sửa hai hàm ghi JSON để không sinh CRLF
+  trên Windows; metric, thứ hạng bottom 10, `created_at`, model roles và raw latency
+  samples **không đổi** (đã kiểm chứng bằng so sánh JSON).
+- Cache khoá thêm theo model/prompt/version (`src/cache_keys.py`).
+- `bottom_10[].diagnosis`/`suggested_fix` xuất lại theo phân loại dựa trên bằng chứng;
+  `rank`, `avg_score` và `worst_metric` của cả 10 dòng **không đổi**.
+- Ba báo cáo Markdown sửa lại; `blueprint.md` sửa kết luận sai về ngưỡng RAGAS của
+  nhóm multi_hop.
+
+**Vòng 2 — final polish (chưa commit tại thời điểm ghi mục này):**
+
+- `README.md` viết lại thành tài liệu của repo **đã hoàn thành bài**: tổng quan ba
+  phase, tình trạng Tasks 1–13, kiến trúc (phân biệt phần đã implement với phần chỉ
+  đề xuất trong blueprint), hướng dẫn kiểm tra offline, cảnh báo khi chạy live, kết quả
+  và giới hạn, và phần tái lập. Không còn mô tả trạng thái starter.
+- Thêm `.github/workflows/validate.yml`: CI offline trên Ubuntu + Python 3.11, chỉ cài
+  4 gói test, không secrets, không gọi provider, không tải model, không khởi động
+  Qdrant/Docker, không sửa artifacts. **Chưa có run thật trên GitHub** nên trạng thái
+  CI là *chưa kiểm chứng trên hạ tầng GitHub*; cùng chuỗi lệnh đã được chạy lại trong
+  một bản clone sạch trên máy này và tất cả đều exit 0.
+- Chẩn đoán Task 3 được cải thiện theo review: phân biệt **total abstention** /
+  **partial answer** / **missing context evidence** / **missing specific evidence** /
+  **abstention despite available evidence** / **version conflict**, và xác định phiên
+  bản bằng **header của tài liệu được truy xuất** thay vì tìm chuỗi phiên bản trong
+  thân văn bản. Hệ quả: `bottom_10` có 6/10 dòng đổi nhãn; id 44 được phân loại lại
+  thành **version conflict** (bản 1.0 được lấy về, chuỗi `v2.0` chỉ là câu “ĐÃ THAY THẾ
+  bởi v2.0” trong chính bản cũ), id 33 thành **partial answer**, id 40 thành **missing
+  context evidence** dựa trên độ phủ chủ đề. `rank`, `avg_score`, `worst_metric`,
+  `per_question`, `per_distribution`, `failure_clusters` và mọi timestamp **không đổi**.
+- Thêm `tests/test_phase_a_diagnosis.py` (16 test theo tình huống, dựng từ dữ liệu tổng
+  hợp nên không phụ thuộc id câu hỏi) và cập nhật `doc/reports/failure_clusters.md`
+  cho khớp artifacts.
+
+Đối chiếu minh bạch giữa các vòng: metric và mọi kết quả thực nghiệm **giữ nguyên**;
+chỉ chú giải (`diagnosis`/`suggested_fix`), tài liệu, test và metadata hash được cập
+nhật. Không có lượt gọi API nào, nên không có số đo nào được tạo mới trong cả hai vòng.

@@ -1,0 +1,92 @@
+# Offline validation for the Day 24 submission.
+#
+# Scope: this workflow proves the repository's EVIDENCE is internally consistent — it
+# validates schemas and contracts, recomputes the recorded source hashes, checks that the
+# committed Phase A annotations still match Task 3, and runs the offline unit suite.
+#
+# It deliberately does NOT:
+#   * use API keys or GitHub Secrets (there are no secrets in this workflow at all);
+#   * call any provider (OpenAI / Gemini / W&B) — tests/conftest.py blocks sockets;
+#   * download ML models, NeMo, spaCy or Qdrant images;
+#   * start Docker / Qdrant;
+#   * run the live experiments or modify artifacts.
+#
+# The live batch (RAGAS / Judge / Guardrails) is intentionally out of scope: it costs
+# money, needs a key, and its results are already committed under artifacts/.
+name: validate
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-validation:
+    name: Offline tests, hashes and schemas (Python 3.11)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements/requirements-test.lock.txt
+
+      - name: Install offline test dependencies
+        # Only the pinned minimal test lock: pytest, PyYAML, python-dotenv, jsonschema.
+        # No ML stack is needed — the tests mock Presidio, NeMo and the SDKs, and all
+        # heavy imports in src/ are deferred until a caller actually needs them.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements/requirements-test.lock.txt
+
+      - name: Report environment
+        run: |
+          python --version
+          python -m pytest --version
+
+      - name: Static check (compile every module)
+        # Cheapest gate first (shift left): a syntax error anywhere in src/, scripts/,
+        # tests/ or config.py fails here in seconds instead of surfacing as a confusing
+        # collection error inside pytest. Uses only the stdlib, so no extra dependency.
+        run: python -m compileall -q src scripts tests config.py
+
+      - name: Run offline unit tests
+        # Fails on any student/support contract regression. No network is possible:
+        # the autouse fixture in tests/conftest.py raises on socket.connect.
+        run: python -m pytest tests/ -q
+
+      - name: Verify recorded source hashes match the real files
+        # Recomputes SHA-256 of the six source files from their bytes and compares them
+        # with metadata.source_sha256 in the three artifacts. A CRLF/LF difference or an
+        # edited input file makes this step exit 1, which is the point: stale evidence
+        # must fail loudly instead of passing as valid.
+        run: python scripts/refresh_metadata_hashes.py --check
+
+      - name: Verify Phase A annotations match Task 3
+        # Recomputes bottom_10 from the metrics already stored in the artifact and
+        # compares the diagnosis/fix text. Read-only: refuses to write, and exits 1 if
+        # the committed annotation drifted from the code.
+        run: python scripts/refresh_phase_a_annotations.py --check
+
+      - name: Run submission checker (schema + contract + counts)
+        # Validates the four JSON Schemas and every derived count/average/label/percentile.
+        # Runs WITHOUT --with-tests on purpose: pytest already ran in its own step above,
+        # so this keeps the two failure modes clearly separated and avoids running the
+        # suite twice. Together the steps cover everything check_lab.py --with-tests does.
+        run: python scripts/check_lab.py
+
+      - name: Confirm the validation did not modify the repository
+        # Guarantees the workflow is observational: if any step rewrote a tracked file
+        # (artifacts, fixtures, reports) this fails instead of silently committing drift.
+        run: |
+          git status --porcelain
+          test -z "$(git status --porcelain)"
+          git diff --exit-code
