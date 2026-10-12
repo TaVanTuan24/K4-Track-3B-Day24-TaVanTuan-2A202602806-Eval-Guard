@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from dataclasses import asdict, dataclass
 
@@ -22,6 +23,32 @@ DIAGNOSTIC_TREE = {
 
 DISTRIBUTIONS = ("factual", "multi_hop", "adversarial")
 METRICS = ("faithfulness", "answer_relevancy", "context_precision", "context_recall")
+
+# ─── Root-cause vocabulary (Task 3 diagnosis) ────────────────────────────────
+# `DIAGNOSTIC_TREE` maps the metric that scored lowest to a generic cause. That is a
+# useful default, but it is wrong for the most common failure in this corpus: an answer
+# of "Không tìm thấy." scores faithfulness 0.0 without containing a single unsupported
+# claim, so calling it "LLM hallucinating" names the opposite problem. The classifier
+# below refines the label with evidence that is actually in the row (answer text,
+# retrieved contexts, reference) and falls back to DIAGNOSTIC_TREE otherwise.
+#
+# Contract kept intact: `worst_metric` is still the argmin of the four metrics, the
+# bottom-10 membership and ordering are unchanged, and metrics are never rewritten.
+ABSTENTION_MARKERS = (
+    "không tìm thấy", "không có thông tin", "không đề cập", "chưa có thông tin",
+    "không đủ thông tin", "không thể trả lời", "không cung cấp thông tin",
+)
+# A version is "obsolete" when the reference says so in the same sentence.
+OBSOLETE_MARKERS = ("hết hiệu lực", "đã bị thay thế", "thay thế hoàn toàn", "không còn hiệu lực", "bản cũ")
+
+# NOTE on polarity (negation) errors: they are NOT auto-classified here. A lexical rule
+# ("reference forbids + answer lacks a negation word") flags a correct answer as an
+# error — measured on this run it mislabelled row 45, whose answer ("Có, MFA bắt buộc
+# cho tất cả nhân viên…") matches the reference with faithfulness 1.0. Polarity is
+# therefore verified by reading the row in the report instead of by a keyword test.
+_VERSION_RE = re.compile(r"\bv(\d+(?:\.\d+)*)\b", re.IGNORECASE)
+_NUMBER_RE = re.compile(r"\d[\d.,]*\d|\d")
+_SENTENCE_SPLIT = re.compile(r"[.;:\n]+")
 
 
 @dataclass
@@ -180,8 +207,105 @@ def run_ragas_50q(answers: list[dict]) -> RagasEvaluation:
     return RagasEvaluation(results, evaluator_models)
 
 
+def is_abstention(answer: str) -> bool:
+    """The model declined instead of answering — the opposite of hallucinating."""
+    text = (answer or "").strip().lower().rstrip(".")
+    return any(text.startswith(marker) or text == marker for marker in ABSTENTION_MARKERS)
+
+
+def reference_numbers(text: str) -> set[str]:
+    """Digit strings with separators removed, keeping only distinctive values (2+ digits).
+
+    Comparing numbers is the least ambiguous "is the needed fact in the context" test:
+    amounts, day counts, extension numbers and thresholds are what the answers turn on.
+    Version labels are removed first, so `v1.3` cannot masquerade as the number 13.
+    """
+    numbers = set()
+    for raw in _NUMBER_RE.findall(_VERSION_RE.sub(" ", text or "")):
+        digits = re.sub(r"[.,]", "", raw)
+        if len(digits) >= 2:
+            numbers.add(digits)
+    return numbers
+
+
+def version_markers(text: str) -> set[str]:
+    """Version labels such as v1.0 / v2024 / v1.3 (normalised without the `v`)."""
+    return {match.group(1) for match in _VERSION_RE.finditer(text or "")}
+
+
+def obsolete_versions(reference: str) -> set[str]:
+    """Versions the reference itself marks as superseded, judged sentence by sentence."""
+    obsolete: set[str] = set()
+    for sentence in _SENTENCE_SPLIT.split(reference or ""):
+        stripped = sentence.strip().lower()
+        if any(marker in stripped for marker in OBSOLETE_MARKERS):
+            obsolete |= version_markers(sentence)
+    return obsolete
+
+
+def current_versions(reference: str) -> set[str]:
+    """Versions the reference treats as in force = all versions minus obsolete ones."""
+    return version_markers(reference) - obsolete_versions(reference)
+
+
+def is_version_conflict(result: RagasResult) -> bool:
+    """True only when the evidence proves an obsolete-only retrieval.
+
+    Requires: the reference distinguishes superseded from in-force versions, the
+    contexts surface an obsolete version, and no in-force version is present at all.
+    A row whose contexts do contain the in-force version is NOT called a conflict —
+    that keeps the label tied to bytes instead of to a guess.
+    """
+    obsolete = obsolete_versions(result.ground_truth)
+    current = current_versions(result.ground_truth)
+    if not obsolete or not current:
+        return False
+    context_versions: set[str] = set()
+    for context in result.contexts:
+        context_versions |= version_markers(context)
+    return bool(context_versions & obsolete) and not (context_versions & current)
+
+
+def missing_reference_numbers(result: RagasResult) -> set[str]:
+    """Distinctive values of the reference that never appear in any retrieved context."""
+    wanted = reference_numbers(result.ground_truth)
+    present = reference_numbers(" ".join(result.contexts))
+    return wanted - present
+
+
+def diagnose(result: RagasResult) -> tuple[str, str]:
+    """Evidence-based root cause for one row, with `DIAGNOSTIC_TREE` as the fallback.
+
+    Order matters: an obsolete-only retrieval is specific and checkable, so it is tested
+    before the generic abstention split; the metric-based default only runs when nothing
+    more precise applies. Polarity (negation) errors are deliberately NOT auto-classified
+    — see the note next to the vocabulary constants above.
+    """
+    missing = missing_reference_numbers(result)
+
+    if is_version_conflict(result):
+        return ("Version conflict — context chỉ chứa bản đã hết hiệu lực, thiếu bản hiện hành",
+                "Lọc theo phiên bản (metadata filter trên auto_metadata.version) và nêu rõ "
+                "bản hiện hành so với bản đã bị thay thế trong prompt generation.")
+
+    if is_abstention(result.answer):
+        if missing:
+            return (f"Retrieval failure + abstention — model từ chối và context thiếu "
+                    f"{len(missing)} dữ kiện của reference (ví dụ {sorted(missing)[:3]})",
+                    "Tăng recall: cải thiện chunking/top-k, thêm BM25 cho số và mã, và chỉ "
+                    "cho phép trả lời 'Không tìm thấy.' khi mọi context đều không liên quan.")
+        return ("Abstention — context có bằng chứng nhưng model vẫn từ chối trả lời",
+                "Nới điều kiện trả lời 'Không tìm thấy.' trong system prompt, yêu cầu dùng "
+                "mọi context liên quan và hạ temperature; đây là lỗi generation, không phải hallucination.")
+
+    return DIAGNOSTIC_TREE[result.worst_metric]
+
+
 def bottom_10(results: list[RagasResult]) -> list[dict]:
     """Task 3: Lấy 10 câu hỏi có avg_score thấp nhất.
+
+    Ranking and `worst_metric` come straight from the measured metrics; only the
+    diagnosis/fix text is refined by `diagnose()`.
 
     Returns:
         [{"rank": 1, "question_id": ..., "distribution": ...,
@@ -191,7 +315,7 @@ def bottom_10(results: list[RagasResult]) -> list[dict]:
     ordered = sorted(results, key=lambda r: r.avg_score)[:10]
     rows: list[dict] = []
     for rank, result in enumerate(ordered, start=1):
-        diagnosis, fix = DIAGNOSTIC_TREE[result.worst_metric]
+        diagnosis, fix = diagnose(result)
         rows.append({
             "rank": rank,
             "question_id": result.question_id,

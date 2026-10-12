@@ -31,6 +31,9 @@ class JudgeResult:
     scores_pass2: dict = field(default_factory=dict)
 
 
+# If the MEANING of this prompt changes, bump `cache_keys.PAIRWISE_PROMPT_VERSION`.
+# Cached verdicts are keyed by (judge model, prompt version, inputs), so a bump makes
+# old verdicts un-reusable instead of silently mixing two rubrics.
 PROMPT_TEMPLATE = '''Bạn là một expert đánh giá chất lượng câu trả lời RAG.
 
 Câu hỏi: {question}

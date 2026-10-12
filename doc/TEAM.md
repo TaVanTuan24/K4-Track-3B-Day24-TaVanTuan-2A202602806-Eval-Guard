@@ -55,6 +55,22 @@ import được nhưng `transformers` 5.19 cần `torch.accelerator`.
 `artifacts/answers_50q.json` có đủ 50 answers, 20/20/10, tất cả
 `generation_mode = llm`.
 
+Tái lập byte của tài liệu (audit cuối): repo không có `.gitattributes` và
+`core.autocrlf=true`, nên git lưu blob LF nhưng checkout ra working tree CRLF, trong
+khi `metadata.source_sha256` băm chính byte working tree; đồng thời
+`atomic_write_json`/`write_json` mở file ở text mode nên Python dịch `\n` thành
+`os.linesep` và ghi ra CRLF trên Windows. Hệ quả: repo chỉ pass `check_lab.py` trên
+máy đã sinh artifact, còn clone trên Linux (working tree LF) thì `validate_metadata`
+báo `Stale experiment source`. Đã sửa cả hai phía: thêm `.gitattributes`
+(`* text=auto eol=lf` + rule tường minh cho `*.json/*.md/*.py/*.yml/*.txt` và
+`binary` cho PDF) rồi chuẩn hoá lại working tree, **và** ghim `newline="\n"` trong
+hai hàm ghi JSON để byte sinh ra giống nhau trên mọi nền tảng. Sau đó hash được ghi
+lại bằng `scripts/refresh_metadata_hashes.py` (chỉ đổi `metadata.source_sha256`, giữ
+nguyên metric, thứ hạng, timestamp, model). Kiểm chứng: `git ls-files --eol` không
+còn file `w/crlf` nào, hash LF khớp blob, và `tests/test_hash_reproducibility.py` tái
+hiện đúng lỗi cũ (băm một bản CRLF của file nguồn, và ghi JSON rồi kiểm tra không có
+`\r\n`).
+
 Nếu full NeMo chưa hoàn chỉnh, ghi lỗi thật: xem mục `annoy` ở trên — phần thiếu là
 một dependency không cài được, kèm bằng chứng rằng các rail mà bài dùng vẫn chạy.
 
@@ -64,28 +80,40 @@ một dependency không cài được, kèm bằng chứng rằng các rail mà 
 
 - Phần được giao và phần thực tế đã làm: toàn bộ bài. Cụ thể: `src/llm_client.py`
   (factory client OpenAI-compatible dùng chung + retry/backoff 429/5xx + pacing),
-  `src/checkpoint.py` (ghi JSON nguyên tử, resume an toàn), `src/embeddings.py`,
+  `src/checkpoint.py` (ghi JSON nguyên tử LF-only, resume an toàn), `src/cache_keys.py`
+  (fingerprint cache theo model/prompt/input), `src/embeddings.py`,
   `src/m1_chunking.py`, `src/m2_search.py`, `src/m3_rerank.py`, `src/m4_eval.py`,
   `src/m5_enrichment.py`, `scripts/setup_answers.py`, `scripts/check_api.py`,
-  `scripts/check_evaluator.py`, `guardrails/config.yml` (engine Gemini), và
-  Tasks 1–12 trong `src/phase_a_ragas.py`, `src/phase_b_judge.py`,
-  `src/phase_c_guard.py`.
-- Bằng chứng: ba artifact `ragas_50q.json` (139.544 bytes),
-  `judge_results.json` (13.720 bytes), `guard_results.json` (15.076 bytes) cùng
-  `answers_50q.json` (128.488 bytes), ba báo cáo trong `doc/reports/`, và commit của
-  bài nộp ghi ở mục cuối.
-- Cách kiểm tra: offline `python -m pytest tests/ -q` cho **86 passed, 3 deselected**
-  (và `-m support` cho 60 passed); live `python scripts/check_api.py --live` cho 12
-  check PASS (1 lượt chat, structured JSON, NeMo input chặn jailbreak/cho qua câu
-  sạch, NeMo output chặn output nhạy cảm/giữ output sạch);
+  `scripts/check_evaluator.py`, `scripts/refresh_metadata_hashes.py`,
+  `scripts/refresh_phase_a_annotations.py`, `guardrails/config.yml` (engine Gemini),
+  `.gitattributes` (LF đa nền tảng) và Tasks 1–12 trong `src/phase_a_ragas.py`,
+  `src/phase_b_judge.py`, `src/phase_c_guard.py`.
+  Audit cuối bổ sung `tests/test_hash_reproducibility.py`,
+  `tests/test_cache_keys.py` và `tests/test_report_numbers.py`.
+- Bằng chứng: ba artifact `ragas_50q.json` (140.0 KB), `judge_results.json` (13.5 KB),
+  `guard_results.json` (14.6 KB) cùng `answers_50q.json` (127.8 KB), ba báo cáo trong
+  `doc/reports/`, và commit của bài nộp ghi ở mục cuối. Kích thước đo sau khi đã
+  chuẩn hoá LF và ghi lại hash.
+- Cách kiểm tra: offline `python -m pytest tests/ -q` cho **136 passed, 3 deselected**
+  (`-m support` 110 passed, `-m student` 26 passed); live `python scripts/check_api.py
+  --live` cho 12 check PASS (1 lượt chat, structured JSON, NeMo input chặn jailbreak/
+  cho qua câu sạch, NeMo output chặn output nhạy cảm/giữ output sạch);
   `python scripts/check_evaluator.py --live --rows 3` để kiểm tra evaluator trước khi
   chạy đủ 50; `python scripts/run_experiments.py --phase a/b/c --live`.
+  Hậu kiểm offline, không gọi API: `python scripts/refresh_metadata_hashes.py --check`,
+  `python scripts/refresh_phase_a_annotations.py --check`,
+  `python scripts/check_lab.py --with-tests` (0 failed checks).
 - Điều đã học: (1) LLM provider trong NeMo 0.10.0 được chọn theo **tên model**, nên
   không thể dùng `engine: openai` với model Gemini mà phải đăng ký engine riêng;
   (2) `max_tokens=3` mặc định của self-check khiến model trả `None` và mọi input bị
   chặn — phải khai báo `max_tokens` trong prompt config; (3) coi mọi entity Presidio
   là PII làm chặn nhầm 8/8 câu sạch, phải lọc theo allowlist; (4) retry/backoff và
-  cache theo từng câu là điều kiện để chạy được batch thật trên hạn mức thấp.
+  cache theo từng câu là điều kiện để chạy được batch thật trên hạn mức thấp;
+  (5) hash ghi trong metadata phải tính trên byte ổn định đa nền tảng — thiếu
+  `.gitattributes` thì `core.autocrlf` làm working tree thành CRLF, và ghi JSON ở text
+  mode cũng sinh CRLF trên Windows, nên hash chỉ đúng trên máy đã chạy;
+  (6) cache phải khoá theo cả model/prompt chứ không chỉ theo input, nếu không nó trả
+  lại điểm của model cũ sau khi đổi `EVALUATOR_MODEL`/`JUDGE_MODEL`.
 - Giới hạn/cách xử lý: `.env` trên máy này để `GEMINI_API_KEY` trống và trỏ
   `OPENAI_BASE_URL` sang endpoint OpenAI-compatible khác
   (`deepseek-ai/DeepSeek-V4.1-Flash`), nên **không có lượt gọi Gemini nào được thực

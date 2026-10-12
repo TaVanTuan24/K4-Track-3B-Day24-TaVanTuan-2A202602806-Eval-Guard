@@ -131,3 +131,61 @@ Kiểm chứng import của full runtime:
 .\.venv311\Scripts\python.exe -m spacy download en_core_web_lg   # 3.8.0, install từ wheel local
 ```
 
+## Tái lập byte và độ ổn định đa nền tảng (line endings)
+
+Đây là lỗi tái lập thật đã gặp và đã sửa, không phải cấu hình cho đẹp.
+
+**Triệu chứng.** Ba artifact ghi `metadata.source_sha256` của các file nguồn, và
+`src/report_contracts.py` tính lại hash bằng `Path.read_bytes()`. Repo **không có
+`.gitattributes`** và `core.autocrlf=true`, nên git lưu blob ở dạng **LF** nhưng
+checkout ra working tree **CRLF**. Vì hash được tính trên byte working tree, artifact
+ghi hash của bản CRLF:
+
+```text
+fixtures/test_set_50q.json   CRLF (đã ghi)  0e87f26e020a32c62ea0864940720618f39600b9d3378193704cf2f86e88446d
+                             LF  (blob)     3ad288426e3066e561737b35b66b671e6c411697dffd0d1161cc7b801e5954cc
+```
+
+**Hai nguyên nhân, không chỉ một.** Ngoài git, chính code ghi file cũng phụ thuộc nền
+tảng: `atomic_write_json` (`src/checkpoint.py`) và `write_json`
+(`src/experiment_support.py`) mở file ở text mode, nên Python dịch `\n` thành
+`os.linesep` và **ghi ra CRLF trên Windows**. Nghĩa là kể cả có `.gitattributes`, một
+lần chạy lại `setup_answers.py` trên Windows vẫn tạo `answers_50q.json` CRLF trên đĩa,
+và hash ghi lại sẽ lại không khớp trên Linux. Cả hai phía đều phải sửa.
+
+**Hệ quả.** `python scripts/check_lab.py` xanh trên đúng máy Windows đã sinh artifact
+và đỏ trên mọi clone Linux/CI (working tree LF), với lỗi
+`Phase A artifact: Stale experiment source: answers_50q.json`.
+
+**Cách sửa.** (1) `.gitattributes` buộc **LF trên mọi nền tảng** (`* text=auto eol=lf`
+cộng rule tường minh cho `*.json/*.md/*.py/*.yml/*.yaml/*.txt/*.ini/*.co/*.example` và
+`binary` cho `*.pdf/*.bin/*.onnx/*.gguf/*.zip`) rồi chuẩn hoá lại working tree; (2)
+ghim `newline="\n"` trong hai hàm ghi JSON để byte sinh ra giống nhau trên Windows,
+Linux và CI. Sau đó hash được ghi lại **đúng một lần** cho khớp byte mới:
+
+```powershell
+git add .gitattributes
+git commit -m "chore(git): them .gitattributes, ep buoc LF"
+git rm --cached -r . -q; git reset --hard -q      # ép checkout lại theo attributes
+git ls-files --eol                                 # không còn dòng w/crlf nào
+.\.venv311\Scripts\python.exe scripts/refresh_metadata_hashes.py --check
+.\.venv311\Scripts\python.exe scripts/refresh_metadata_hashes.py --reason "LF normalization"
+```
+
+Lưu ý vận hành: `git reset --hard` và `git checkout-index -a -f` **xoá mọi thay đổi
+chưa commit**; chỉ chạy khi cây làm việc đã sạch, và commit trước nếu đang có sửa đổi.
+
+**Bảo đảm không đổi kết quả.** Việc ghi lại hash chỉ chạm
+`metadata.source_sha256`: `scripts/refresh_metadata_hashes.py` tính hash từ file thật
+(không hardcode checksum), từ chối ghi nếu thiếu file nguồn, và giữ nguyên
+`created_at`, `run_kind`, `format_version`, model roles, metric, thứ hạng và raw
+latency samples. Không chạy lại RAGAS/Judge/Guardrails vì hash không phải là phép đo.
+`tests/test_hash_reproducibility.py` khoá các tính chất này, gồm cả việc tái hiện lỗi
+cũ (băm một bản CRLF của file nguồn) và kiểm tra hai hàm ghi JSON không sinh `\r\n`.
+
+**Chỉnh sửa chú giải mà không chạy lại API.** `bottom_10[].diagnosis` là chú giải do
+Task 3 sinh, không phải số đo; `scripts/refresh_phase_a_annotations.py` tính lại đúng
+trường đó từ `per_question` đã lưu, và **từ chối ghi** nếu `rank`/`avg_score`/
+`worst_metric`/thành viên bottom 10 sẽ đổi. Cả hai script đều có `--check` để dùng
+trong CI mà không sửa file.
+

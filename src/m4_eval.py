@@ -29,11 +29,11 @@ never passed off as complete.
 """
 from __future__ import annotations
 
-import hashlib
 from types import SimpleNamespace
 from typing import Any, Iterable, Sequence
 
 import config
+import src.cache_keys as cache_keys
 import src.llm_client as llm
 from src.checkpoint import ResumableStore
 
@@ -164,12 +164,39 @@ def _validate_inputs(questions, answers, contexts, ground_truths) -> list[dict]:
     return rows
 
 
+def _metric_version(impl: str) -> str:
+    """Version string for the metric definition behind `impl`.
+
+    Included in the cache key so an upgrade that changes metric behaviour invalidates
+    cached rows instead of silently mixing scores from two definitions.
+    """
+    if impl == LIBRARY:
+        try:
+            import ragas
+            return f"ragas-{getattr(ragas, '__version__', 'unknown')}"
+        except Exception:  # noqa: BLE001 - version is informative, not load-bearing
+            return "ragas-unknown"
+    return cache_keys.BUILTIN_METRIC_VERSION
+
+
 def _row_key(row: dict, impl: str) -> str:
-    digest = hashlib.sha256()
-    for part in (impl, row["question"], row["answer"], "\x1f".join(row["contexts"]), row["ground_truth"]):
-        digest.update(part.encode("utf-8"))
-        digest.update(b"\x1e")
-    return digest.hexdigest()
+    """Cache key covering implementation, evaluator LLM, embeddings, version and inputs.
+
+    Previously this covered only (implementation, question, answer, contexts,
+    ground_truth), so switching `EVALUATOR_MODEL` or `EMBEDDING_MODEL` silently reused
+    scores produced by the previous model. The API key is deliberately excluded: a
+    credential rotation must not discard completed work.
+    """
+    return cache_keys.ragas_row_key(
+        implementation=impl,
+        evaluator_model=config.EVALUATOR_MODEL,
+        embedding_model=config.EMBEDDING_MODEL,
+        metric_version=_metric_version(impl),
+        question=row["question"],
+        answer=row["answer"],
+        contexts=row["contexts"],
+        ground_truth=row["ground_truth"],
+    )
 
 
 class _CacheView:
@@ -190,7 +217,12 @@ class _CacheView:
     def put(self, row: dict, impl: str, values: dict) -> None:
         key = _row_key(row, impl)
         record = {"key": key, "implementation": impl, "question_id": row["question_id"],
-                  "question": row["question"], "values": values}
+                  "question": row["question"], "values": values,
+                  # Provenance of the cached row, so a human can audit which model and
+                  # which metric version produced a reused score.
+                  "evaluator_model": config.EVALUATOR_MODEL,
+                  "embedding_model": config.EMBEDDING_MODEL,
+                  "metric_version": _metric_version(impl)}
         self._pending[key] = record
         self.store.upsert(record, save=False)
         self.flush()

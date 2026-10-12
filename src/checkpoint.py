@@ -18,12 +18,20 @@ from typing import Any, Iterable
 
 
 def atomic_write_json(path: str | os.PathLike, payload: Any) -> Path:
-    """Write `payload` as UTF-8 JSON, atomically."""
+    """Write `payload` as UTF-8 JSON with LF endings, atomically.
+
+    `newline="\\n"` is deliberate: in text mode Python translates "\\n" to
+    `os.linesep`, so on Windows every artifact would be written as CRLF. Because
+    `metadata.source_sha256` is computed from raw file bytes, a platform-dependent writer
+    makes the recorded hashes platform-dependent too — the same class of bug as a CRLF
+    checkout, but inside the code rather than in git. Pinning the newline keeps generated
+    JSON byte-identical on Windows, Linux and CI.
+    """
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(dir=str(target.parent), prefix=target.name + ".", suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
             json.dump(payload, handle, ensure_ascii=False, indent=2, allow_nan=False)
             handle.write("\n")
             handle.flush()

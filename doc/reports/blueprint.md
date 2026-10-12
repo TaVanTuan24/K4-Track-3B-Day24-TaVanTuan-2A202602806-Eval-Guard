@@ -78,13 +78,44 @@ end-to-end có short-circuit với timestamp theo từng chặng; cả ba vẫn 
 - Full guard P95 <500ms chỉ áp dụng **sau khi** thực sự đo full guard.
 
 Mốc bắt buộc của lab vẫn là attacks ≥15/20; bonus ≥18/20 kèm clean controls đạt.
+Các ngưỡng RAGAS ở trên là **đề xuất của nhóm**, không phải yêu cầu bắt buộc của đề bài.
 
-Đối chiếu với số đo thật: faithfulness trung bình toàn bộ 50 câu nằm dưới 0.75 ở
-hai nhóm multi_hop (0.6295) và adversarial (0.7667 ở ngưỡng), avg_score của
-adversarial (0.6278) và multi_hop (0.6623) đều dưới 0.65 — nên **gate RAGAS đề xuất
-sẽ đỏ** với pipeline hiện tại ở hai nhóm đó, trong khi factual (0.8434) sẽ xanh.
-Guard thì xanh tuyệt đối: attacks 20/20, clean 8/8, false_positive_rate 0.0,
-output 4/4.
+### Đối chiếu ngưỡng đề xuất với số đo thật
+
+Hai cách áp dụng ngưỡng cho kết quả khác nhau, nên phải nói rõ đang dùng cách nào.
+Mọi giá trị dưới đây tính trực tiếp từ `artifacts/ragas_50q.json` (50 dòng
+`per_question`), không lấy từ `per_distribution` đã làm tròn sẵn.
+
+Cách A — **global gates** (trung bình trên toàn bộ 50 câu):
+
+| Chỉ số toàn tập | Giá trị | Ngưỡng đề xuất | Kết quả |
+|---|---:|---:|---|
+| faithfulness | 0.775145 | ≥0.75 | Đạt |
+| answer_relevancy | 0.692823 | không đặt | — |
+| context_precision | 0.803333 | không đặt | — |
+| context_recall | 0.640000 | không đặt | — |
+| avg_score | 0.727825 | ≥0.65 | Đạt |
+
+Cách B — **per-distribution gates** (áp riêng cho từng nhóm):
+
+| Distribution | faithfulness | ≥0.75 | avg_score | ≥0.65 |
+|---|---:|---|---:|---|
+| factual (20) | 0.925000 | Đạt | 0.843430 | Đạt |
+| multi_hop (20) | 0.629528 | **Không đạt** | 0.662252 | Đạt |
+| adversarial (10) | 0.766667 | Đạt | 0.627762 | **Không đạt** |
+
+Kết luận đúng: theo **cách A** pipeline đạt cả hai ngưỡng toàn tập (faithfulness
+0.775145 và avg_score 0.727825). Theo **cách B** thì mỗi nhóm hỏng đúng một tiêu chí
+khác nhau — multi_hop chỉ hỏng faithfulness, adversarial chỉ hỏng avg_score, còn
+factual đạt cả hai. Vì vậy câu “cả multi_hop và adversarial đều có avg_score dưới
+0.65” là sai và đã được sửa: multi_hop có avg_score 0.662252, **trên** ngưỡng 0.65.
+Cách B khắt khe hơn nhiều vì nhóm chỉ có 10 câu thì một câu 0.0 là đủ kéo trung bình
+xuống: adversarial có 3 câu avg_score 0.0 trong 10 câu.
+
+Đề xuất dùng: **cách A làm gate chặn CI** (ổn định, đạt), và **cách B làm cảnh báo
+theo nhóm** (không chặn) vì nó phát hiện đúng hai điểm yếu mà cách A che mất. Guard
+thì xanh tuyệt đối theo cả hai cách: attacks 20/20, clean 8/8,
+false_positive_rate 0.0, output 4/4.
 
 Workflow chưa được triển khai. Nếu triển khai, job chỉ gọi runner đã có và để
 runner tự trả nonzero:

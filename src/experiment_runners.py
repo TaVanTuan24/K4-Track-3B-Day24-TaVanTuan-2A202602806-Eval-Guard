@@ -42,6 +42,7 @@ def _input_hash(value):
 
 
 def run_phase_b():
+    from src import cache_keys
     from src import phase_b_judge as phase
     from src.checkpoint import ResumableStore
     answers = read_json(ANSWERS_PATH)
@@ -53,49 +54,61 @@ def run_phase_b():
     by_human = {row["question_id"]: row for row in humans}
 
     # Resumable caches: a run interrupted by quota keeps the judge calls it already
-    # paid for. Each entry records the hashes of its inputs, so an edited answer or
-    # model_answer invalidates the row instead of silently reusing a stale verdict.
+    # paid for. Each entry's fingerprint covers the judge model, the prompt version and
+    # the full inputs (question, both candidates / supplied answer, reference), so
+    # changing the judge model or the prompt invalidates the row instead of silently
+    # reusing a verdict produced by a different configuration.
     cache_dir = Path(ARTIFACTS_DIR) / "cache"
     pair_store = ResumableStore(cache_dir / "phase_b_pairwise.json", key_field="question_id")
     binary_store = ResumableStore(cache_dir / "phase_b_binary.json", key_field="question_id")
+    judge_model = phase.JUDGE_MODEL
 
     results = []
     for qid in PAIR_QUESTION_IDS:
         answer_a = by_answer[qid]["answer"]
         answer_b = by_human[qid]["model_answer"]
+        question = by_question[qid]["question"]
+        reference = by_question[qid]["ground_truth"]
+        key = cache_keys.pairwise_judge_key(
+            judge_model=judge_model, prompt_version=cache_keys.PAIRWISE_PROMPT_VERSION,
+            question=question, answer_a=answer_a, answer_b=answer_b, reference=reference)
         cached = pair_store.get(qid)
-        if (cached and cached.get("answer_a_hash") == _input_hash(answer_a)
-                and cached.get("answer_b_hash") == _input_hash(answer_b)):
+        if cached and cached.get("fingerprint") == key:
             results.append(cached["result"])
             continue
-        q = by_question[qid]
-        result = phase.swap_and_average(
-            q["question"], answer_a, answer_b,
-            reference=q["ground_truth"])
+        result = phase.swap_and_average(question, answer_a, answer_b, reference=reference)
         row = {"question_id": qid, **asdict(result)}
-        pair_store.upsert({"question_id": qid, "answer_a_hash": _input_hash(answer_a),
-                           "answer_b_hash": _input_hash(answer_b), "result": row})
+        pair_store.upsert({"question_id": qid, "fingerprint": key,
+                           "judge_model": judge_model,
+                           "prompt_version": cache_keys.PAIRWISE_PROMPT_VERSION,
+                           "answer_a_hash": _input_hash(answer_a),
+                           "answer_b_hash": _input_hash(answer_b),
+                           "reference_hash": _input_hash(reference),
+                           "result": row})
         results.append(row)
 
     judgments = []
     binary_client = llm.get_client(role="judge")
     for human in humans:
-        cached = binary_store.get(human["question_id"])
-        if (cached and cached.get("model_answer_hash") == _input_hash(human["model_answer"])
-                and cached.get("reference_hash")
-                == _input_hash(by_question[human["question_id"]]["ground_truth"])):
+        qid = human["question_id"]
+        reference = by_question[qid]["ground_truth"]
+        key = cache_keys.binary_judge_key(
+            judge_model=judge_model, prompt_version=cache_keys.BINARY_PROMPT_VERSION,
+            question=human["question"], model_answer=human["model_answer"], reference=reference)
+        cached = binary_store.get(qid)
+        if cached and cached.get("fingerprint") == key:
             judgments.append(cached["result"])
             continue
         # Exact supplied answer. Never pass human_label or human_note into judge_binary.
         result = judge_binary(human["question"], human["model_answer"],
-                              by_question[human["question_id"]]["ground_truth"], client=binary_client)
-        row = {"question_id": human["question_id"],
-               "question": human["question"], "model_answer": human["model_answer"],
-               **result}
-        binary_store.upsert({"question_id": human["question_id"],
+                              reference, client=binary_client)
+        row = {"question_id": qid, "question": human["question"],
+               "model_answer": human["model_answer"], **result}
+        binary_store.upsert({"question_id": qid, "fingerprint": key,
+                             "judge_model": judge_model,
+                             "prompt_version": cache_keys.BINARY_PROMPT_VERSION,
                              "model_answer_hash": _input_hash(human["model_answer"]),
-                             "reference_hash": _input_hash(
-                                 by_question[human["question_id"]]["ground_truth"]),
+                             "reference_hash": _input_hash(reference),
                              "result": row})
         judgments.append(row)
     judge_labels = [row["label"] for row in judgments]
