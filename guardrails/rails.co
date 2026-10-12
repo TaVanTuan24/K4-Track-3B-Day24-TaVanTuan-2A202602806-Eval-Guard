@@ -1,6 +1,15 @@
-# Colang 1.0. Input/output flows dùng built-in self check rails của NeMo 0.10.0.
-# Chính sách kiểm tra được khai báo trong prompts của config.yml.
-# Không khai báo lại các flow hệ thống hoặc action check_facts chưa đăng ký.
+# Colang 1.0 input/output flows for NeMo Guardrails 0.10.0.
+#
+# The self-check flows themselves are the built-in ones shipped with 0.10.0
+# (nemoguardrails/library/self_check/input_check/flows.v1.co) and are enabled by
+# `rails.input.flows` / `rails.output.flows` in config.yml. The policy wording lives
+# in the `self_check_input` / `self_check_output` prompts in config.yml.
+#
+# We only override the refusal wording here so the assistant declines in Vietnamese.
+# This intentionally replaces the library's English default for the same flow name.
+#
+# Do not declare system flows again, and do not reference an unregistered action
+# such as `check_facts` — doing so fails at RailsConfig load time on 0.10.0.
 
 define bot refuse to respond
   "Xin lỗi, tôi không thể thực hiện yêu cầu này. Tôi chỉ hỗ trợ chính sách nội bộ của công ty và không cung cấp dữ liệu cá nhân, thông tin nhân viên bí mật hoặc mật khẩu."

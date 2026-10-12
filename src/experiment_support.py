@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from config import JUDGE_MODEL, LATENCY_BUDGET_P95_MS
+import src.llm_client as llm
 
 
 def read_json(path):
@@ -106,21 +107,22 @@ Trả JSON: {"label": 0 hoặc 1, "reasoning": "giải thích ngắn theo tiêu 
 
 
 def judge_binary(question, answer, reference, *, client=None):
-    """Provided bridge to 0/1 calibration. Never accepts human_label/human_note."""
+    """Provided bridge to 0/1 calibration. Never accepts human_label/human_note.
+
+    Runs on the shared OpenAI-compatible client (src/llm_client.py) so the configured
+    Gemini endpoint, 429 retry/backoff and pacing apply to this helper too.
+    """
     if client is None:
-        from openai import OpenAI
-        client = OpenAI()
-    response = client.chat.completions.create(
-        model=JUDGE_MODEL, temperature=0,
-        response_format={"type": "json_object"},
+        client = llm.get_client(role="judge")
+    result = llm.chat_json(
+        client, model=JUDGE_MODEL, temperature=0,
         messages=[
             {"role": "system", "content": BINARY_SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps(
                 {"question": question, "answer": answer, "reference": reference},
                 ensure_ascii=False)},
         ],
-    )
-    result = json.loads(response.choices[0].message.content)
+        label="binary judge")
     if type(result.get("label")) is not int or result["label"] not in (0, 1):
         raise ValueError("Binary judge label must be integer 0 or 1.")
     if not isinstance(result.get("reasoning"), str) or not result["reasoning"].strip():

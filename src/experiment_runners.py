@@ -7,6 +7,7 @@ from pathlib import Path
 
 from config import (ADVERSARIAL_SET_PATH, ANSWERS_PATH, ARTIFACTS_DIR, CLEAN_SET_PATH,
                     HUMAN_LABELS_PATH, OUTPUT_SET_PATH, PAIR_QUESTION_IDS, TEST_SET_PATH)
+import src.llm_client as llm
 from src.experiment_support import (JUDGE_MODEL, generation_models, guard_models, judge_binary,
                                     metadata, model_ids, read_json, write_json)
 from src.report_contracts import PAIR_SOURCES, validate_answers, validate_phase_a, validate_phase_b, validate_phase_c
@@ -35,8 +36,14 @@ def run_phase_a():
     return report
 
 
+def _input_hash(value):
+    import hashlib
+    return hashlib.sha256(str(value).encode("utf-8")).hexdigest()
+
+
 def run_phase_b():
     from src import phase_b_judge as phase
+    from src.checkpoint import ResumableStore
     answers = read_json(ANSWERS_PATH)
     questions = read_json(TEST_SET_PATH)
     humans = read_json(HUMAN_LABELS_PATH)
@@ -44,23 +51,53 @@ def run_phase_b():
     by_answer = {row["id"]: row for row in answers}
     by_question = {row["id"]: row for row in questions}
     by_human = {row["question_id"]: row for row in humans}
+
+    # Resumable caches: a run interrupted by quota keeps the judge calls it already
+    # paid for. Each entry records the hashes of its inputs, so an edited answer or
+    # model_answer invalidates the row instead of silently reusing a stale verdict.
+    cache_dir = Path(ARTIFACTS_DIR) / "cache"
+    pair_store = ResumableStore(cache_dir / "phase_b_pairwise.json", key_field="question_id")
+    binary_store = ResumableStore(cache_dir / "phase_b_binary.json", key_field="question_id")
+
     results = []
     for qid in PAIR_QUESTION_IDS:
+        answer_a = by_answer[qid]["answer"]
+        answer_b = by_human[qid]["model_answer"]
+        cached = pair_store.get(qid)
+        if (cached and cached.get("answer_a_hash") == _input_hash(answer_a)
+                and cached.get("answer_b_hash") == _input_hash(answer_b)):
+            results.append(cached["result"])
+            continue
         q = by_question[qid]
         result = phase.swap_and_average(
-            q["question"], by_answer[qid]["answer"], by_human[qid]["model_answer"],
+            q["question"], answer_a, answer_b,
             reference=q["ground_truth"])
-        results.append({"question_id": qid, **asdict(result)})
+        row = {"question_id": qid, **asdict(result)}
+        pair_store.upsert({"question_id": qid, "answer_a_hash": _input_hash(answer_a),
+                           "answer_b_hash": _input_hash(answer_b), "result": row})
+        results.append(row)
+
     judgments = []
-    from openai import OpenAI
-    binary_client = OpenAI()
+    binary_client = llm.get_client(role="judge")
     for human in humans:
+        cached = binary_store.get(human["question_id"])
+        if (cached and cached.get("model_answer_hash") == _input_hash(human["model_answer"])
+                and cached.get("reference_hash")
+                == _input_hash(by_question[human["question_id"]]["ground_truth"])):
+            judgments.append(cached["result"])
+            continue
         # Exact supplied answer. Never pass human_label or human_note into judge_binary.
         result = judge_binary(human["question"], human["model_answer"],
                               by_question[human["question_id"]]["ground_truth"], client=binary_client)
-        judgments.append({"question_id": human["question_id"],
-                          "question": human["question"], "model_answer": human["model_answer"],
-                          **result})
+        row = {"question_id": human["question_id"],
+               "question": human["question"], "model_answer": human["model_answer"],
+               **result}
+        binary_store.upsert({"question_id": human["question_id"],
+                             "model_answer_hash": _input_hash(human["model_answer"]),
+                             "reference_hash": _input_hash(
+                                 by_question[human["question_id"]]["ground_truth"]),
+                             "result": row})
+        judgments.append(row)
     judge_labels = [row["label"] for row in judgments]
     human_labels = [row["human_label"] for row in humans]
     report = {

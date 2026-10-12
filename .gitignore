@@ -9,5 +9,9 @@ venv/
 .pytest_cache/
 .env.*
 !.env.example
+# Large local model weights (BAAI/bge-m3 is ~2.3 GB): never commit these.
+models/
+# Resumable run caches (partial progress); artifacts/*.json is the evidence.
+artifacts/cache/
 # artifacts/*.json là bằng chứng bắt buộc của bài nộp.
 # Chỉ commit sau khi kiểm tra không có API key hoặc dữ liệu cá nhân thật.

@@ -87,3 +87,47 @@ py -3.11 -m venv .venv-tests
 `requirements/requirements-test.txt` ghi dependencies trực tiếp; file `.lock.txt` khóa
 toàn bộ dependencies của tập test. Đây chỉ là lock unit test, không thay constraints hoặc
 cài đặt full runtime. Không commit virtualenv, key hoặc cache model.
+
+## Ghi nhận thực tế trên máy chạy bài này
+
+Windows 11 (10.0.26200), Python **3.11.15** (uv-managed). Virtualenv full runtime:
+`.venv311/` (đã git-ignore). Lệnh cài và kết quả thật:
+
+```powershell
+uv venv .venv311 --python 3.11.15
+uv pip install -r requirements/requirements.txt -c requirements/constraints-core.txt
+```
+
+Bốn điểm khác starter cần ghi lại vì đây là lỗi thật gặp phải, không phải suy đoán:
+
+1. **`annoy` không cài được trên máy này.** Không có wheel Windows cho bất kỳ bản
+   `annoy` nào trên PyPI (chỉ có sdist), conda-forge không có build `win-64` cho
+   `annoy`, và Visual Studio 2022 trên máy thiếu workload C++ nên không build được
+   sdist. Hệ quả: `pip check` báo `nemoguardrails requires annoy>=1.17.3`, và
+   `nemoguardrails.embeddings.basic` (AnnoyIndex) không import được. Đây là index
+   dùng cho **dialog rails**, không dùng cho `self check input/output` mà bài này
+   bật. Kiểm chứng thực tế: pre-flight `scripts/check_api.py --live` chạy đủ 4 quyết
+   định rail (chặn jailbreak, cho qua câu sạch, chặn output nhạy cảm, giữ output
+   sạch) — stack guard của Phase C hoạt động. NeMo vẫn khởi tạo được vì
+   `from nemoguardrails import RailsConfig, LLMRails` không cần annoy.
+2. **`torch` phải là 2.8.0.** Bản 2.14.1 cài từ PyPI lỗi
+   `OSError [WinError 1114] ... c10.dll` khi import; 2.5.1 import được nhưng
+   `transformers` 5.19 gọi `torch.accelerator` (chỉ có từ torch 2.8) nên
+   `sentence-transformers` không import được. `torch==2.8.0` là bản chạy đúng cả hai.
+3. **`python -m pip` không tồn tại trong venv uv** — dùng `uv pip ...` cho mọi thao tác
+   package.
+4. **`hf download` ghi file 0 byte trên máy này** dù Hub truy cập được (kiểm chứng:
+   `curl` tải `config.json` của BAAI/bge-m3 trả về đúng 687 byte, `sentencepiece.bpe.model`
+   5 MB, `pytorch_model.bin` 2.27 GB). Vì vậy weight bge-m3 được tải bằng `curl` vào
+   `models/bge-m3/` (đã git-ignore), và `src/embeddings.py` tự ưu tiên thư mục local đó
+   rồi mới fallback về model id HuggingFace. Reranker flashrank cũng tải qua HTTPS
+   trực tiếp nên hoạt động bình thường.
+
+Kiểm chứng import của full runtime:
+
+```powershell
+.\.venv311\Scripts\python.exe -c "import ragas, nemoguardrails, presidio_analyzer, spacy,
+    torch, sentence_transformers, flashrank, qdrant_client, langchain_openai; print('imports OK')"
+.\.venv311\Scripts\python.exe -m spacy download en_core_web_lg   # 3.8.0, install từ wheel local
+```
+

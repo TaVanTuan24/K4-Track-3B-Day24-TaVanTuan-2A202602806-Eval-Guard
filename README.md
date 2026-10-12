@@ -12,6 +12,34 @@ indexing và sinh 50 answers được làm **trước buổi học**, không g�
 **Repo đề bài:** [K4-Track-3B-Day24-Eval-Guard](https://github.com/VinUni-AI20k/K4-Track-3B-Day24-Eval-Guard).
 Repo bài nộp nhóm: `K4-L3-DAY24-TenNhom-Eval-Guard`.
 
+## Provider: Google Gemini free tier
+
+Mọi lời gọi LLM trong repo đi qua **một client OpenAI-compatible dùng chung**
+(`src/llm_client.py`): setup answers, evaluator m4, pairwise judge, binary judge,
+m5 enrichment và NeMo Guardrails. Mặc định trỏ tới endpoint OpenAI-compatible của
+Gemini, nên chỉ cần đổi `OPENAI_BASE_URL` + key là chuyển provider.
+
+```powershell
+Copy-Item .env.example .env      # rồi điền GEMINI_API_KEY
+python scripts/check_api.py --live --list-models   # 1 API call + JSON + NeMo
+```
+
+`.env` (đã bị git-ignore) chỉ chứa key; không commit key vào source, log hay report.
+Các biến quan trọng: `GEMINI_API_KEY` (hoặc `OPENAI_API_KEY`),
+`OPENAI_BASE_URL`, `GENERATION_MODEL`, `JUDGE_MODEL`, `EVALUATOR_MODEL`.
+`GENERATION_MODEL` mặc định là `gemini-3.5-flash-lite`; nếu tài khoản không có
+model đó, `check_api.py --list-models` in ra danh sách model thật để đổi trong `.env`.
+
+Free tier được điều tiết bằng `LLM_MAX_CONCURRENCY`, `LLM_MIN_INTERVAL_S` và
+retry/backoff lũy tiến (có jitter, tôn trọng `Retry-After`) khi gặp HTTP 429/5xx.
+Tiến độ được lưu an toàn (`artifacts/cache/`): chạy lại không trả phí cho các lượt
+đã thành công (answers theo từng câu, metric Phase A theo từng câu, judge Phase B).
+
+NeMo Guardrails 0.10.0 chọn LLM provider theo **tên model** (`gpt-3.5`/`gpt-4` →
+`ChatOpenAI`, còn lại là LLM `/completions` cũ mà Gemini không hỗ trợ), nên
+`guardrails/config.yml` dùng `engine: gemini` và engine này được đăng ký thành
+`ChatOpenAI` trong `src/phase_c_guard.py`. Xem comment trong file để biết lý do.
+
 ## Cấu trúc repo
 
 - `src/`: hàm bài tập TODO và phần hỗ trợ.
