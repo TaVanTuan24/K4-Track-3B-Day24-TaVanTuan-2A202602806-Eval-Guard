@@ -10,8 +10,13 @@ Trưởng nhóm/người nộp: Tạ Văn Tuấn — 2A202602806.
 
 Ngày lab/deadline áp dụng: theo thông báo của lớp — Asia/Ho_Chi_Minh (UTC+07:00).
 
-Commit dùng để chấm: `cd8b86cbaedb19b6df1a109ec18a370cf79733c5` (commit cd8b86c, nhánh
-`main`) — commit này chứa toàn bộ source, artifact và báo cáo của bài.
+Commit dùng để chấm: `832bc818738a617fcadc6528f36cb36c6d228686` (commit 832bc81, nhánh
+`main`) — bản mới nhất, đã gồm toàn bộ source, artifact, báo cáo **và** các sửa đổi của
+lần audit cuối. Chuỗi commit liên quan: `cd8b86c` là bản hoàn thành bài (source +
+4 artifact + 3 báo cáo + TEAM), `fbf601a` thêm `.gitattributes`, `832bc81` là audit
+cuối (hash đa nền tảng, cache theo model/prompt, chẩn đoán lỗi theo bằng chứng, sửa
+báo cáo). Artifact thực nghiệm vẫn là kết quả của lần chạy thật ở `cd8b86c`: lần audit
+**không** chạy lại RAGAS/Judge/Guardrails và không phát sinh chi phí API.
 
 Mỗi nhóm nộp một repo. Nhóm này chỉ có một thành viên nên bảng bên dưới có một dòng
 và mục INDIVIDUAL có một mục tương ứng.
@@ -129,8 +134,23 @@ một dependency không cài được, kèm bằng chứng rằng các rail mà 
 
 ## Cập nhật sau khi nộp
 
-Chưa có cập nhật sau deadline. Commit dùng để chấm là
-`cd8b86cbaedb19b6df1a109ec18a370cf79733c5` (cd8b86c), đã chứa đủ source, ba artifact
-và ba báo cáo. Commit kế tiếp chỉ ghi lại chính SHA này vào TEAM.md, không thay đổi
-code, artifact hay nội dung phân tích. Nếu repo được sửa sau deadline thì commit và
-thời điểm sửa sẽ được ghi rõ tại đây.
+Sau bản hoàn thành bài `cd8b86c`, repo được sửa thêm hai lần trong lần **audit cuối**:
+`fbf601a` (thêm `.gitattributes`, ép LF để hash ổn định đa nền tảng) và `832bc81`
+(audit: hash/tài liệu đa nền tảng, cache khoá theo model và prompt, chẩn đoán lỗi theo
+bằng chứng, sửa các kết luận sai trong báo cáo). Commit dùng để chấm là
+`832bc818738a617fcadc6528f36cb36c6d228686` (832bc81), chứa đủ source, ba artifact và
+ba báo cáo.
+
+Thay đổi so với bản nộp đầu, để đối chiếu minh bạch:
+
+- `metadata.source_sha256` trong ba artifact được ghi lại đúng **một lần** cho khớp
+  byte LF sau khi chuẩn hoá line endings; metric, thứ hạng bottom 10, `created_at`,
+  model roles và raw latency samples **không đổi** (đã kiểm chứng bằng so sánh JSON).
+- `bottom_10[].diagnosis`/`suggested_fix` được xuất lại theo phân loại dựa trên bằng
+  chứng (6/10 dòng đổi nhãn, ví dụ “LLM hallucinating” → “Retrieval failure +
+  abstention”); `rank`, `avg_score` và `worst_metric` của cả 10 dòng **không đổi**.
+- Ba báo cáo Markdown được sửa lại; cụ thể `blueprint.md` sửa kết luận sai về ngưỡng
+  RAGAS của nhóm multi_hop, và `failure_clusters.md` phân tích lại nguyên nhân của
+  id 5 và id 44.
+- Không có lượt gọi API nào được thực hiện trong lần audit, nên không có số đo nào
+  được tạo mới.
