@@ -2,7 +2,9 @@
 
 Tên nhóm: K4-Track-3B-TaVanTuan (bài cá nhân, một thành viên).
 
-Repo chung: https://github.com/TaVanTuan24/K4-Track-3B-TaVanTuan-2A202602806-Day24-Eval-Guard
+Repo chung: https://github.com/TaVanTuan24/K4-Track-3B-Day24-TaVanTuan-2A202602806-Eval-Guard
+(GitHub báo repo cũ `K4-Track-3B-TaVanTuan-...` đã chuyển sang địa chỉ này; đây là
+địa chỉ chuẩn và đã được set làm `origin`.)
 
 Trưởng nhóm/người nộp: Tạ Văn Tuấn — 2A202602806.
 
