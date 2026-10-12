@@ -8,8 +8,8 @@ Trưởng nhóm/người nộp: Tạ Văn Tuấn — 2A202602806.
 
 Ngày lab/deadline áp dụng: theo thông báo của lớp — Asia/Ho_Chi_Minh (UTC+07:00).
 
-Commit dùng để chấm: ghi ở mục “Cập nhật sau khi nộp” bên dưới, sau khi artifact và
-báo cáo đã được commit.
+Commit dùng để chấm: `cd8b86cbaedb19b6df1a109ec18a370cf79733c5` (commit cd8b86c, nhánh
+`main`) — commit này chứa toàn bộ source, artifact và báo cáo của bài.
 
 Mỗi nhóm nộp một repo. Nhóm này chỉ có một thành viên nên bảng bên dưới có một dòng
 và mục INDIVIDUAL có một mục tương ứng.
@@ -99,6 +99,8 @@ một dependency không cài được, kèm bằng chứng rằng các rail mà 
 
 ## Cập nhật sau khi nộp
 
-Chưa có cập nhật sau deadline. Commit dùng để chấm được ghi bằng commit kế tiếp sau
-khi ba artifact và ba báo cáo đã nằm trong repo; nếu repo được sửa sau deadline thì
-sẽ ghi rõ commit và thời điểm sửa tại đây.
+Chưa có cập nhật sau deadline. Commit dùng để chấm là
+`cd8b86cbaedb19b6df1a109ec18a370cf79733c5` (cd8b86c), đã chứa đủ source, ba artifact
+và ba báo cáo. Commit kế tiếp chỉ ghi lại chính SHA này vào TEAM.md, không thay đổi
+code, artifact hay nội dung phân tích. Nếu repo được sửa sau deadline thì commit và
+thời điểm sửa sẽ được ghi rõ tại đây.
